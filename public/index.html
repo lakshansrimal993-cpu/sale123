@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="si">
+<head>
+    <meta charset="UTF-8">
+    <title>Daily Sales Target Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f2f2f2; }
+        h2 { text-align: center; color: #333; }
+        .admin-box { background: white; padding: 10px; margin-bottom: 15px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { border-collapse: collapse; width: 100%; background: white; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; font-size: 13px; }
+        .cat-header { background-color: #1e3a8a; color: white; }
+        .sub-header { background-color: #e2e8f0; }
+        .auto-calc { background-color: #fef08a; font-weight: bold; }
+        input { width: 80px; text-align: center; padding: 4px; }
+    </style>
+</head>
+<body>
+
+    <h2>රෙදි සාප්පු දිනපතා අලෙවි වාර්තාව</h2>
+
+    <div class="admin-box">
+        <input type="password" id="adminPass" placeholder="Admin Password">
+        <button onclick="loginAdmin()">Login as Admin</button>
+        <span id="roleStatus" style="font-weight: bold; color: red; margin-left: 10px;">(Read-Only Mode: බලාගැනීමට පමණි)</span>
+    </div>
+
+    <table>
+        <thead>
+            <tr id="catRow">
+                <th rowspan="2">දවස</th>
+            </tr>
+            <tr id="subHeaderRow"></tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+    </table>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        const categories = [
+            { name: "GD", target: 310 },
+            { name: "GT", target: 300 },
+            { name: "SAR", target: 124 },
+            { name: "SLIP", target: 465 },
+            { name: "TWL", target: 450 }
+        ];
+
+        const totalDays = 31;
+        let isAdmin = false;
+        let currentData = {};
+
+        const catRow = document.getElementById('catRow');
+        const subHeaderRow = document.getElementById('subHeaderRow');
+        const tableBody = document.getElementById('tableBody');
+
+        // Table Headers සෑදීම
+        categories.forEach((cat, cIdx) => {
+            let th = document.createElement('th');
+            th.colSpan = 4;
+            th.className = "cat-header";
+            th.innerText = `${cat.name} (Target: ${cat.target})`;
+            catRow.appendChild(th);
+
+            subHeaderRow.innerHTML += `
+                <th class="sub-header">අද අලෙවිය</th>
+                <th class="sub-header">එකතුව</th>
+                <th class="sub-header">ඉතිරි</th>
+                <th class="sub-header">දවසකට</th>
+            `;
+        });
+
+        // Rows සෑදීම
+        for (let day = 1; day <= totalDays; day++) {
+            let tr = document.createElement('tr');
+            tr.innerHTML = `<td>දවස ${day}</td>`;
+
+            categories.forEach((cat, cIdx) => {
+                let cellId = `d${day}_c${cIdx}`;
+                tr.innerHTML += `<td id="${cellId}_sale">-</td>`;
+                tr.innerHTML += `<td id="${cellId}_total" class="auto-calc">-</td>`;
+                tr.innerHTML += `<td id="${cellId}_rem" class="auto-calc">-</td>`;
+                tr.innerHTML += `<td id="${cellId}_req" class="auto-calc">-</td>`;
+            });
+            tableBody.appendChild(tr);
+        }
+
+        function loginAdmin() {
+            const pass = document.getElementById('adminPass').value;
+            socket.emit('adminLogin', pass);
+        }
+
+        socket.on('loginSuccess', (success) => {
+            if (success) {
+                isAdmin = true;
+                document.getElementById('roleStatus').innerText = "(Admin Mode: ඔබට පමණක් දත්ත වෙනස් කළ හැක)";
+                document.getElementById('roleStatus').style.color = "green";
+                renderInputs();
+                updateGrid(currentData);
+            } else {
+                alert("මුරපදය වැරදියි!");
+            }
+        });
+
+        function renderInputs() {
+            for (let day = 1; day <= totalDays; day++) {
+                categories.forEach((cat, cIdx) => {
+                    let cellId = `d${day}_c${cIdx}`;
+                    let td = document.getElementById(`${cellId}_sale`);
+                    let val = currentData[cellId] !== undefined ? currentData[cellId] : "";
+                    td.innerHTML = `<input type="number" id="in_${cellId}" value="${val}" oninput="sendData()">`;
+                });
+            }
+        }
+
+        function sendData() {
+            if (!isAdmin) return;
+            let salesData = {};
+            for (let day = 1; day <= totalDays; day++) {
+                categories.forEach((cat, cIdx) => {
+                    let cellId = `d${day}_c${cIdx}`;
+                    let input = document.getElementById(`in_${cellId}`);
+                    if (input && input.value !== "") {
+                        salesData[cellId] = parseFloat(input.value) || 0;
+                    }
+                });
+            }
+            socket.emit('cellUpdate', salesData);
+        }
+
+        socket.on('loadInitialData', (data) => {
+            currentData = data;
+            updateGrid(data);
+        });
+
+        socket.on('cellUpdated', (data) => {
+            currentData = data;
+            updateGrid(data);
+        });
+
+        function updateGrid(salesData) {
+            categories.forEach((cat, cIdx) => {
+                let runningTotal = 0;
+
+                for (let day = 1; day <= totalDays; day++) {
+                    let cellId = `d${day}_c${cIdx}`;
+                    let todaySale = salesData[cellId] !== undefined ? salesData[cellId] : null;
+
+                    let saleTd = document.getElementById(`${cellId}_sale`);
+                    if (isAdmin) {
+                        let input = document.getElementById(`in_${cellId}`);
+                        if (input && document.activeElement !== input) {
+                            input.value = todaySale !== null ? todaySale : "";
+                        }
+                    } else {
+                        saleTd.innerText = todaySale !== null ? todaySale : "-";
+                    }
+
+                    let totalTd = document.getElementById(`${cellId}_total`);
+                    let remTd = document.getElementById(`${cellId}_rem`);
+                    let reqTd = document.getElementById(`${cellId}_req`);
+
+                    if (todaySale !== null) {
+                        runningTotal += todaySale;
+                        let remaining = cat.target - runningTotal;
+                        let remainingDays = totalDays - day;
+                        let perDay = remainingDays > 0 ? (remaining / remainingDays).toFixed(1) : 0;
+
+                        totalTd.innerText = runningTotal;
+                        remTd.innerText = remaining < 0 ? 0 : remaining;
+                        reqTd.innerText = perDay < 0 ? 0 : perDay;
+                    } else {
+                        totalTd.innerText = "-";
+                        remTd.innerText = "-";
+                        reqTd.innerText = "-";
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
